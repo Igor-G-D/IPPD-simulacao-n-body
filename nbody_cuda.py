@@ -1,3 +1,4 @@
+from numba import cuda
 import numpy as np
 import random
 import matplotlib.pyplot as plt
@@ -30,15 +31,33 @@ def rand_body() -> Body:
     return Body(pos, vel, mass)
 
 
+@cuda.jit
+def compute_forces_kernel(positions, masses, accelerations, n): # função que será executada no gpu
+    i = cuda.grid(1)
+    if i < n:
+        for j in range(n):
+            if i != j:
+                # Computa a diferença das posições manualmente
+                r_x = positions[j, 0] - positions[i, 0]
+                r_y = positions[j, 1] - positions[i, 1]
+                mag_sq = r_x * r_x + r_y * r_y
+                mag = mag_sq ** 0.5  # cálculo de raiz manualmente
+                tmp_x = r_x / (max(mag_sq, MIN) * mag)
+                tmp_y = r_y / (max(mag_sq, MIN) * mag)
+                accelerations[i, 0] += masses[j] * tmp_x
+                accelerations[i, 1] += masses[j] * tmp_y
+
+
 class Simulation:
-    def __init__(self, seed: int, num_bodies: int):
+    def __init__(self, seed: int, num_bodies: int, threads: int):
         random.seed(seed)
         self.num_bodies = num_bodies
+        self.threads = threads
         self.bodies = []
 
         for _ in range(self.num_bodies):
             self.bodies.append(rand_body())  # Gera os corpos
-
+            
         # Calcular o centro de massa (posição e velocidade)
         self.total_mass = sum(b.mass for b in self.bodies)
         self.vel_com = sum(b.vel * b.mass for b in self.bodies) / self.total_mass
@@ -53,34 +72,35 @@ class Simulation:
         max_mag = max(np.linalg.norm(b.pos) for b in self.bodies)
         for b in self.bodies:
             b.pos /= max_mag
+
     def update(self):
-        # Itera sobre cada corpo na simulação
-        for i in range(len(self.bodies)):
-            p1 = self.bodies[i].pos  
-            m1 = self.bodies[i].mass 
-
-            # Compara esse corpo com todos os outros que ainda não foram comparados
-            for j in range(i + 1, len(self.bodies)):
-                p2 = self.bodies[j].pos  
-                m2 = self.bodies[j].mass 
-
-                # Vetor de deslocamento entre os corpos
-                r = p2 - p1
-                
-                # Calcula a raiz da magnitude da distância
-                mag_sq = np.dot(r, r)
-                
-                # Calcula a magnitude da distâcia
-                mag = np.sqrt(mag_sq)
-                
-                # Usa max(mag_sq, MIN) para evitar divisão por 0, evita que corpos ganhem uma aceleração gigantesca quando se aproximam muito
-                # Computa a força usando a equação de gravidade (G = 1)
-                tmp = r / (max(mag_sq, MIN) * mag)
-
-                # Atualiza as velocidades com a terceira lei de newton
-                self.bodies[i].acc += m2 * tmp  
-                self.bodies[j].acc -= m1 * tmp  
-
+        n = len(self.bodies)
+        
+        # Peeparando os dados para CUDA
+        positions = np.array([b.pos for b in self.bodies], dtype=np.float32)
+        masses = np.array([b.mass for b in self.bodies], dtype=np.float32)
+        accelerations = np.zeros_like(positions)
+        
+        # Alocar memória
+        d_positions = cuda.to_device(positions)
+        d_masses = cuda.to_device(masses)
+        d_accelerations = cuda.to_device(accelerations)
+        
+        # Número de threads e blocks
+        threads_per_block = self.threads
+        blocks_per_grid = (n + threads_per_block - 1) // threads_per_block
+        
+        # kerner que executa no GPU
+        compute_forces_kernel[blocks_per_grid, threads_per_block](d_positions, d_masses, d_accelerations, n)
+        
+        # Copiar os resultados para o host
+        accelerations = d_accelerations.copy_to_host()
+        
+        # Atualizar as acelerações
+        for i, b in enumerate(self.bodies):
+            b.acc = accelerations[i]
+        
+        # Atualizar as posições
         for body in self.bodies:
             body.update(DT)
 
@@ -121,12 +141,13 @@ class Simulation:
 
         ani = FuncAnimation(fig, update_plot, frames=total_frames, interval=1, blit=True)
         plt.show()
-
+        
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="N-Body Simulation")
     parser.add_argument("--n", type=int, default=20, help="Numero de corpos na simulação")
+    parser.add_argument("--threads", type=int, default=64, help="Numero de threads por bloco")
     args = parser.parse_args()
     seed = 1
     print(f"Iniciando simulação com {args.n} corpos")
-    sim = Simulation(seed, num_bodies=args.n)
+    sim = Simulation(seed, num_bodies=args.n, threads=args.threads)
     sim.plot()
