@@ -32,20 +32,46 @@ def rand_body() -> Body:
 
 
 @cuda.jit
-def compute_forces_kernel(positions, masses, accelerations, n): # função que será executada no gpu
-    i = cuda.grid(1)
+def compute_forces_kernel(positions, masses, accelerations, n):
+    i = cuda.grid(1) 
+    threads_per_block = cuda.blockDim.x
+    
+    shared_positions = cuda.shared.array(shape=(128, 2), dtype=np.float32) # alocar memória compartilhada
+    shared_masses = cuda.shared.array(shape=(128,), dtype=np.float32)
+
     if i < n:
-        for j in range(n):
-            if i != j:
-                # Computa a diferença das posições manualmente
-                r_x = positions[j, 0] - positions[i, 0]
-                r_y = positions[j, 1] - positions[i, 1]
-                mag_sq = r_x * r_x + r_y * r_y
-                mag = mag_sq ** 0.5  # cálculo de raiz manualmente
-                tmp_x = r_x / (max(mag_sq, MIN) * mag)
-                tmp_y = r_y / (max(mag_sq, MIN) * mag)
-                accelerations[i, 0] += masses[j] * tmp_x
-                accelerations[i, 1] += masses[j] * tmp_y
+        acc_x, acc_y = 0.0, 0.0
+
+        for tile in range(0, n, threads_per_block):
+            local_idx = cuda.threadIdx.x  # índice local dentro do bloco
+            global_j = tile + local_idx # parte da memória compartilhada que irá computar
+
+            
+            if global_j < n: # carrega dados na memória compartilhada se estiver dentro dos limites
+                shared_positions[local_idx, 0] = positions[global_j, 0]
+                shared_positions[local_idx, 1] = positions[global_j, 1]
+                shared_masses[local_idx] = masses[global_j]
+            cuda.syncthreads()  # sincroniza depois de carregar
+
+            # Computa a diferença das posições manualmente, usando memória compartilhada
+            for j in range(threads_per_block):
+                global_j = tile + j
+                if global_j < n and i != global_j:
+                    r_x = shared_positions[j, 0] - positions[i, 0]
+                    r_y = shared_positions[j, 1] - positions[i, 1]
+                    mag_sq = r_x * r_x + r_y * r_y
+                    mag = mag_sq ** 0.5
+                    tmp_x = r_x / (max(mag_sq, MIN) * mag)
+                    tmp_y = r_y / (max(mag_sq, MIN) * mag)
+                    acc_x += shared_masses[j] * tmp_x
+                    acc_y += shared_masses[j] * tmp_y
+
+            cuda.syncthreads()  # sincroniza antes de ir para o pŕoximo bloco
+
+        # armazena as acelerações computadas
+        accelerations[i, 0] = acc_x
+        accelerations[i, 1] = acc_y
+
 
 
 class Simulation:
@@ -87,8 +113,9 @@ class Simulation:
         d_accelerations = cuda.to_device(accelerations)
         
         # Número de threads e blocks
-        threads_per_block = self.threads
+        threads_per_block = min(args.threads, 128)  # não pode exceder limites de memória
         blocks_per_grid = (n + threads_per_block - 1) // threads_per_block
+
         
         # kerner que executa no GPU
         compute_forces_kernel[blocks_per_grid, threads_per_block](d_positions, d_masses, d_accelerations, n)

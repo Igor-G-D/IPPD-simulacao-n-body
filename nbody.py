@@ -86,15 +86,15 @@ class Simulation:
 
     def plot(self):
         fig, ax = plt.subplots(figsize=(6, 6))
-        ax.set_title("Simulação de Corpos")
+        ax.set_title(f"Simulação de {self.num_bodies} Corpos")
         ax.set_xlabel("X Position")
         ax.set_ylabel("Y Position")
         ax.set_xlim(-1.5, 1.5)
         ax.set_ylim(-1.5, 1.5)
         ax.grid(True)
 
-        scatters = [ax.scatter(b.pos[0], b.pos[1], s=b.mass * 50) for b in self.bodies]
-        total_frames = 200
+        scatters = [ax.scatter(b.pos[0], b.pos[1], s=b.mass * 10) for b in self.bodies]
+        total_frames = 5000
         
         # Adiciona o texto na posição superior esquerda do gráfico
         avg_time_text = ax.text(-1.4, 1.4, '', fontsize=12, color='red')
@@ -102,7 +102,7 @@ class Simulation:
         def update_plot(frame):
             start_time = time.time()  # Início da contagem de cada frame
             
-            for _ in range(500):  # Número de atualizações entre frames
+            for _ in range(50):  # Número de atualizações entre frames
                 self.update()
             
             # Atualiza os dados dos corpos
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="N-Body Simulation")
     parser.add_argument("--n", type=int, default=20, help="Numero de corpos na simulação")
     args = parser.parse_args()
-    seed = 1
+    seed = random.randint(0,1000)
     print(f"Iniciando simulação com {args.n} corpos")
     sim = Simulation(seed, num_bodies=args.n)
     sim.plot()
