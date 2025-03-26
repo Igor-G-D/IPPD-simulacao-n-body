@@ -16,7 +16,7 @@ baseado nos materiais:
 Para rodar:
 - python nbody.py --n {número de corpos}
 - python nbody_cuda.py --n {número de corpos} --threads {número de threads por bloco}
-
+- python nbody_cuda_shared_memory.py --n {número de corpos} --threads {número de threads por bloco, max 128}
 
 
 
